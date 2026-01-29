@@ -6,14 +6,20 @@ from sentence_transformers import SentenceTransformer
 
 class SentinelEmbedder:
     def __init__(self, device=None, verbose=True, vector_dim=1536):
-        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        resolved_device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = (
+            resolved_device
+            if isinstance(resolved_device, torch.device)
+            else torch.device(resolved_device)
+        )
         self.verbose = verbose
         if self.verbose:
-            print(f"--- 🚀 Initializing Qwen-2.5 Core on {self.device.upper()} ---")
+            device_label = str(self.device).upper()
+            print(f"--- 🚀 Initializing Qwen-2.5 Core on {device_label} ---")
 
         self.model = SentenceTransformer(
             "Alibaba-NLP/gte-Qwen2-1.5b-instruct",
-            device=self.device,
+            device=str(self.device),
             trust_remote_code=True,
         )
 

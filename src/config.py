@@ -1,3 +1,4 @@
+import logging
 import os
 import torch
 
@@ -14,7 +15,24 @@ COLLECTION_NAME = "sentinel_100k_manifold"
 GT_COLLECTION = f"{COLLECTION_NAME}_float32"
 BQ_COLLECTION = COLLECTION_NAME
 
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+logger = logging.getLogger(__name__)
+
+
+def resolve_device() -> str:
+    requested = os.getenv("SENTINEL_DEVICE", "cuda").lower()
+    if requested == "cuda":
+        if torch.cuda.is_available():
+            return "cuda"
+        logger.warning(
+            "CUDA requested via SENTINEL_DEVICE but not available; falling back to CPU."
+        )
+        return "cpu"
+    if requested == "cpu":
+        return "cpu"
+    return requested
+
+
+DEVICE = resolve_device()
 FINAL_RESULTS_FILE = "final_ieee_data.json"
 RECALL_AT_K = 10
 
