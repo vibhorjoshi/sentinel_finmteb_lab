@@ -1,12 +1,31 @@
 import os
+import torch
 
 N_SAMPLES = 100000        # The 100K target for your paper
-VECTOR_DIM = 1536        # Qwen-2.5 GTE Dimension
-RABITQ_EPSILON = 1.9     # 95% Confidence Bound for Rescoring
+TARGET_DOCS = int(os.getenv("SENTINEL_TARGET_DOCS", "1000"))  # IEEE final benchmark target
+VECTOR_DIM = 1536         # Qwen-2.5 GTE Dimension
+RABITQ_EPSILON = 1.9      # 95% Confidence Bound for Rescoring
+COMPRESSION_RATIO = 32.0
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_PATH = os.path.join(BASE_DIR, "data", "qdrant_storage")
+RESULTS_PATH = os.path.join(BASE_DIR, "results")
 COLLECTION_NAME = "sentinel_100k_manifold"
+GT_COLLECTION = f"{COLLECTION_NAME}_float32"
+BQ_COLLECTION = COLLECTION_NAME
+
+DEVICE = os.getenv("SENTINEL_DEVICE", "cuda" if torch.cuda.is_available() else "cpu")
+FINAL_RESULTS_FILE = "final_ieee_data.json"
+RECALL_AT_K = 10
+
+CLOUD_LOAD_GBPS = 160.0
+SENTINEL_LOAD_GBPS = CLOUD_LOAD_GBPS / COMPRESSION_RATIO
+BYTES_PER_FULL_VECTOR = VECTOR_DIM * 4
+BYTES_PER_RABITQ_VECTOR = VECTOR_DIM / 8
+DEFAULT_PERSONA = "Forensic Auditor"
+
+CONCURRENT_NODES = 10000
+EMBEDDING_BATCH_SIZE = 64
 
 # --- FINANCIAL PERSONAS (Fin-E5 Methodology) ---
 FINANCIAL_PERSONAS = {
