@@ -13,9 +13,20 @@ from src.dataset import load_financial_corpus
 from src.embedder import FinancialEmbedder
 from src.engine import SentinelEngine
 from src.metrics import compute_fidelity_with_qrels, calculate_network_load
-from src.config import RESULTS_PATH, GT_COLLECTION, BQ_COLLECTION, N_SAMPLES
+from src.config import (
+    RESULTS_PATH,
+    GT_COLLECTION,
+    BQ_COLLECTION,
+    N_SAMPLES,
+    ENABLE_RERANKING,
+    RERANK_MODEL,
+    RERANK_TOP_K,
+    RERANK_BATCH_SIZE,
+    DEVICE,
+)
 from qdrant_client import models
 import torch
+from src.reranker import CrossEncoderReranker
 
 def _load_finmteb_with_fallback():
     print("\n[Phase 1] Loading FinMTEB Financial Corpus with Smart Alignment...")
@@ -123,6 +134,13 @@ def run_large_scale_experiment():
     
     # ========== Phase 5: Large-Scale Retrieval Benchmark ==========
     print(f"\n[Phase 5] Benchmarking Retrieval Fidelity ({len(query_vectors):,} queries)...")
+    reranker = None
+    if ENABLE_RERANKING:
+        reranker = CrossEncoderReranker(
+            model_name=RERANK_MODEL,
+            device=DEVICE,
+            batch_size=RERANK_BATCH_SIZE,
+        )
     results = {
         "metadata": {
             "n_queries": len(query_texts),
@@ -152,7 +170,8 @@ def run_large_scale_experiment():
             bq_response = engine.client.query_points(
                 collection_name=BQ_COLLECTION,
                 query=q_vec,
-                limit=int(10 * factor),
+                limit=max(int(10 * factor), RERANK_TOP_K if ENABLE_RERANKING else int(10 * factor)),
+                with_payload=ENABLE_RERANKING,
                 search_params=models.SearchParams(
                     quantization=models.QuantizationSearchParams(
                         ignore=False,
@@ -163,7 +182,15 @@ def run_large_scale_experiment():
             )
             
             # Extract top-10 results
-            retrieved_ids = [str(hit.id) for hit in bq_response.points][:10]
+            if reranker:
+                reranked = reranker.rerank(
+                    query_texts[i],
+                    bq_response.points,
+                    top_k=RERANK_TOP_K,
+                )
+                retrieved_ids = [item.doc_id for item in reranked][:10]
+            else:
+                retrieved_ids = [str(hit.id) for hit in bq_response.points][:10]
             
             # Compute fidelity metrics
             recall, is_hit = compute_fidelity_with_qrels(qrels, current_qid, retrieved_ids)

@@ -109,7 +109,7 @@ class SentinelEngine:
     def get_collection_info(self):
         info = self.client.get_collection(self.collection_name)
         return {
-            "name": info.name,
+            "name": self.collection_name,
             "points_count": info.points_count,
         }
 
