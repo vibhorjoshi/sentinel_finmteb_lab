@@ -36,8 +36,27 @@ BATCH_SIZE = 128
 EPS_0 = 1.9  # RaBitQ confidence parameter (Johnson-Lindenstrauss bound)
 
 # Auto-detect GPU with explicit CUDA priority
+REQUESTED_DEVICE = os.getenv("SENTINEL_DEVICE", "cuda").lower()
+SUPPRESS_CPU_WARNING = os.getenv("SENTINEL_SUPPRESS_CPU_WARNING", "").lower() in {
+    "1",
+    "true",
+    "yes",
+}
+
 def get_device():
     """Intelligently select compute device, prioritizing CUDA."""
+    if REQUESTED_DEVICE == "cpu":
+        return torch.device("cpu")
+
+    if REQUESTED_DEVICE != "cuda":
+        try:
+            return torch.device(REQUESTED_DEVICE)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Unsupported SENTINEL_DEVICE '{REQUESTED_DEVICE}'. "
+                "Use 'cuda', 'cpu', or a valid torch device string."
+            ) from exc
+
     if torch.cuda.is_available():
         device = torch.device("cuda")
         logger.info(f"✓ CUDA Detected: {torch.cuda.get_device_name(0)}")
@@ -45,7 +64,8 @@ def get_device():
         logger.info(f"  Available Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
     else:
         device = torch.device("cpu")
-        logger.warning("! CUDA Not Available - Using CPU (Performance may be reduced)")
+        if not SUPPRESS_CPU_WARNING:
+            logger.warning("! CUDA Not Available - Using CPU (Performance may be reduced)")
     return device
 
 DEVICE = get_device()
@@ -482,9 +502,18 @@ class SentinelSovereignLab:
         except Exception as e:
             logger.error(f"Failed to load model: {e}")
             raise
+
+        self.vector_dim = self.model.get_sentence_embedding_dimension()
+        if self.vector_dim != VECTOR_DIM:
+            logger.warning(
+                "Model embedding dimension (%s) differs from default VECTOR_DIM (%s); "
+                "using model dimension for RaBitQ and collection sizes.",
+                self.vector_dim,
+                VECTOR_DIM,
+            )
         
         # 2. PHASE 2: Initialize RaBitQ Orthogonal Rotation
-        self.rabitq = RaBitQRotationMatrix(VECTOR_DIM, DEVICE)
+        self.rabitq = RaBitQRotationMatrix(self.vector_dim, DEVICE)
         
         # 3. Initialize Qdrant Client
         self.client = QdrantClient(path=storage_path)
@@ -495,7 +524,7 @@ class SentinelSovereignLab:
             self.model, self.client, self.collection_name, DEVICE
         )
         self.collaborative_grader = MultiAgentCollaborativeGrader(DEVICE)
-        self.backhaul_calculator = BackhaulGainRatioCalculator(VECTOR_DIM)
+        self.backhaul_calculator = BackhaulGainRatioCalculator(self.vector_dim)
         
         # 5. Fidelity Tracker
         self.fidelity_tracker = TopologicalFidelityTracker()
@@ -576,7 +605,7 @@ class SentinelSovereignLab:
         self.client.create_collection(
             collection_name=self.collection_name,
             vectors_config=models.VectorParams(
-                size=VECTOR_DIM, 
+                size=self.vector_dim, 
                 distance=models.Distance.COSINE,
                 on_disk=True
             ),
@@ -745,7 +774,7 @@ class SentinelSovereignLab:
         )
         
         # Estimate confidence using RaBitQ error bound: O(1/sqrt(D))
-        rabitq_error_bound = 1.0 / np.sqrt(VECTOR_DIM)
+        rabitq_error_bound = 1.0 / np.sqrt(self.vector_dim)
         confidence_score = 1.0 - rabitq_error_bound
         
         results = {
@@ -855,7 +884,7 @@ class SentinelSovereignLab:
         """Export comprehensive Phase 2 & 3 analysis report."""
         report = {
             "phase_2": {
-                "rabitq_matrix_dimension": VECTOR_DIM,
+                "rabitq_matrix_dimension": self.vector_dim,
                 "persona_augmentation_enabled": True,
                 "topological_fidelity_metrics": self.fidelity_tracker.metrics
             },
