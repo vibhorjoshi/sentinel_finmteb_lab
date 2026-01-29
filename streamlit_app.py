@@ -20,6 +20,13 @@ PIPELINE_STEPS = [
     ("Phase 4", "Export results"),
 ]
 
+LEGACY_METRICS_MAP = {
+    "recall@10": "fidelity_recall_at_10",
+    "compression_ratio": "compression_ratio",
+    "cloud_load_gbps": "projected_100k_cloud_load_gbps",
+    "sentinel_load_gbps": "projected_100k_sentinel_load_gbps",
+}
+
 
 def _load_results():
     if not os.path.exists(RESULTS_FILE):
@@ -66,6 +73,31 @@ def _infer_pipeline_state(log_text):
                 state[key] = "running"
                 break
     return state
+
+
+def _extract_summary_metrics(results):
+    if not results:
+        return {}
+    metrics = results.get("evaluation_metrics")
+    if metrics:
+        recall_at_k = metrics.get("recall_at_k", {})
+        precision_at_k = metrics.get("precision_at_k", {})
+        ndcg_at_k = metrics.get("ndcg_at_k", {})
+        return {
+            "recall@10": recall_at_k.get("10", 0),
+            "precision@10": precision_at_k.get("10", 0),
+            "ndcg@10": ndcg_at_k.get("10", 0),
+            "map": metrics.get("map", 0),
+            "legacy": False,
+        }
+
+    return {
+        "recall@10": results.get(LEGACY_METRICS_MAP["recall@10"], 0),
+        "precision@10": 0,
+        "ndcg@10": 0,
+        "map": 0,
+        "legacy": True,
+    }
 
 
 def _start_benchmark(target_docs, device):
@@ -186,6 +218,13 @@ with st.sidebar:
         st.session_state.benchmark_process = None
         st.warning("Benchmark process terminated.")
 
+    st.markdown("---")
+    st.markdown("### Live Refresh")
+    auto_refresh = st.toggle("Auto-refresh every 5s", value=True)
+    if auto_refresh:
+        st.caption("Refreshing logs & results automatically.")
+        st.autorefresh(interval=5000, key="auto_refresh")
+
 col_status, col_metrics = st.columns([1.1, 1.4])
 
 with col_status:
@@ -211,31 +250,30 @@ with col_metrics:
     st.markdown("### Latest Results")
     results = _load_results()
     if results:
-        metrics = results.get("evaluation_metrics", {})
-        recall_at_k = metrics.get("recall_at_k", {})
-        precision_at_k = metrics.get("precision_at_k", {})
-        ndcg_at_k = metrics.get("ndcg_at_k", {})
+        summary = _extract_summary_metrics(results)
+        if summary.get("legacy"):
+            st.info("Legacy results format detected. Showing available metrics.")
 
         st.markdown("#### Summary Metrics")
         metric_cols = st.columns(4)
         metric_cols[0].markdown(
             f"<div class='metric-card'><div class='metric-label'>Recall@10</div>"
-            f"<div class='metric-value'>{recall_at_k.get('10', 0):.4f}</div></div>",
+            f"<div class='metric-value'>{summary.get('recall@10', 0):.4f}</div></div>",
             unsafe_allow_html=True,
         )
         metric_cols[1].markdown(
             f"<div class='metric-card'><div class='metric-label'>Precision@10</div>"
-            f"<div class='metric-value'>{precision_at_k.get('10', 0):.4f}</div></div>",
+            f"<div class='metric-value'>{summary.get('precision@10', 0):.4f}</div></div>",
             unsafe_allow_html=True,
         )
         metric_cols[2].markdown(
             f"<div class='metric-card'><div class='metric-label'>NDCG@10</div>"
-            f"<div class='metric-value'>{ndcg_at_k.get('10', 0):.4f}</div></div>",
+            f"<div class='metric-value'>{summary.get('ndcg@10', 0):.4f}</div></div>",
             unsafe_allow_html=True,
         )
         metric_cols[3].markdown(
             f"<div class='metric-card'><div class='metric-label'>MAP</div>"
-            f"<div class='metric-value'>{metrics.get('map', 0):.4f}</div></div>",
+            f"<div class='metric-value'>{summary.get('map', 0):.4f}</div></div>",
             unsafe_allow_html=True,
         )
 
