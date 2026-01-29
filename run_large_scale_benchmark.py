@@ -17,30 +17,71 @@ from src.config import RESULTS_PATH, GT_COLLECTION, BQ_COLLECTION, N_SAMPLES
 from qdrant_client import models
 import torch
 
+def _load_finmteb_with_fallback():
+    print("\n[Phase 1] Loading FinMTEB Financial Corpus with Smart Alignment...")
+    start_load = time.time()
+    try:
+        corpus, queries, qrels = load_financial_corpus(use_full_data=True)
+        load_mode = "full"
+    except Exception as exc:
+        print(f"   [Warn] Full dataset load failed: {exc}")
+        print("   [Warn] Falling back to subset loading for reliability.")
+        corpus, queries, qrels = load_financial_corpus(use_full_data=False)
+        load_mode = "subset"
+
+    if not corpus or not queries:
+        raise RuntimeError(
+            "FinMTEB dataset failed to load with any records. "
+            "Verify dataset availability or connectivity."
+        )
+
+    corpus_ids = set(corpus.keys())
+    query_ids = set(queries.keys())
+    filtered_qrels = {}
+    missing_doc_ids = 0
+    missing_query_ids = 0
+
+    for qid, doc_ids in qrels.items():
+        if qid not in query_ids:
+            missing_query_ids += 1
+            continue
+        filtered_docs = [doc_id for doc_id in doc_ids if doc_id in corpus_ids]
+        if len(filtered_docs) != len(doc_ids):
+            missing_doc_ids += len(doc_ids) - len(filtered_docs)
+        if filtered_docs:
+            filtered_qrels[qid] = filtered_docs
+
+    print(f"   ✓ Loaded mode: {load_mode}")
+    print(f"   ✓ Loaded {len(corpus):,} documents")
+    print(f"   ✓ Loaded {len(queries):,} queries")
+    print(f"   ✓ Loaded {len(filtered_qrels):,} qrels (ground truth)")
+    if missing_query_ids or missing_doc_ids:
+        print(
+            "   [Info] Filtered qrels to align with loaded corpus/queries "
+            f"(dropped {missing_query_ids:,} query ids, {missing_doc_ids:,} doc links)."
+        )
+    print(f"   [Time] {time.time() - start_load:.1f}s")
+
+    return corpus, queries, filtered_qrels
+
+
 def run_large_scale_experiment():
     print("=" * 70)
     print("   IEEE TMLCN: LARGE-SCALE BENCHMARK (100k Queries)")
     print("=" * 70)
     print(f"[Config] N_SAMPLES={N_SAMPLES:,} queries")
     print(f"[Config] Device: {'CUDA/GPU' if torch.cuda.is_available() else 'CPU (Multi-process)'}")
-    
-    # ========== Phase 1: Data Loading ==========
-    print("\n[Phase 1] Loading FinMTEB Financial Corpus with Smart Alignment...")
     start_load = time.time()
     
-    corpus, queries, qrels = load_financial_corpus(use_full_data=True)
-    
+    # ========== Phase 1: Data Loading ==========
+    corpus, queries, qrels = _load_finmteb_with_fallback()
+
     # Convert to lists
     doc_ids = list(corpus.keys())
     doc_texts = list(corpus.values())
     
     query_ids = list(queries.keys())
     query_texts = list(queries.values())
-    
-    print(f"   ✓ Loaded {len(corpus):,} documents")
-    print(f"   ✓ Loaded {len(queries):,} queries")
-    print(f"   ✓ Loaded {len(qrels):,} qrels (ground truth)")
-    print(f"   [Time] {time.time() - start_load:.1f}s")
     
     # ========== Phase 2: Embedding ==========
     print("\n[Phase 2] Vectorizing Corpus & Queries...")
