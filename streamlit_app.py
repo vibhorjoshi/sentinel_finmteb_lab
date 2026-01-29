@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import subprocess
 from datetime import datetime
 
@@ -10,12 +11,61 @@ RESULTS_DIR = os.path.join(BASE_DIR, "results")
 RESULTS_FILE = os.path.join(RESULTS_DIR, "final_ieee_data.json")
 LOG_FILE = os.path.join(RESULTS_DIR, "benchmark_run.log")
 
+PIPELINE_STEPS = [
+    ("Phase 0", "Smart subset loading"),
+    ("Phase 1", "Vectorization"),
+    ("Phase 2", "Index build"),
+    ("Phase 3", "Retrieval + evaluation"),
+    ("Phase 3B", "Multi-agent analysis"),
+    ("Phase 4", "Export results"),
+]
+
 
 def _load_results():
     if not os.path.exists(RESULTS_FILE):
         return None
     with open(RESULTS_FILE, "r") as f:
         return json.load(f)
+
+
+def _read_logs():
+    if not os.path.exists(LOG_FILE):
+        return ""
+    with open(LOG_FILE, "r") as f:
+        return f.read()
+
+
+def _infer_pipeline_state(log_text):
+    state = {key: "pending" for key, _ in PIPELINE_STEPS}
+    if not log_text:
+        return state
+    if "PHASE 0" in log_text:
+        state["Phase 0"] = "complete"
+    if "PHASE 1: DOCUMENT VECTORIZATION" in log_text or "Encoding" in log_text:
+        state["Phase 1"] = "complete"
+    if "PHASE 2: INDEX BUILDING" in log_text:
+        state["Phase 2"] = "complete"
+    if "PHASE 3C: RETRIEVAL & COMPREHENSIVE EVALUATION" in log_text:
+        state["Phase 3"] = "complete"
+    if "PHASE 3B: MULTI-AGENT ANALYSIS" in log_text:
+        state["Phase 3B"] = "complete"
+    if "PHASE 4: COMPREHENSIVE EXPORT" in log_text:
+        state["Phase 4"] = "complete"
+
+    if "BENCHMARK COMPLETE" not in log_text:
+        for key in state:
+            if state[key] == "complete":
+                continue
+            if re.search(rf"{key}[:\s]", log_text, re.IGNORECASE):
+                state[key] = "running"
+                break
+        else:
+            for key in state:
+                if state[key] == "complete":
+                    continue
+                state[key] = "running"
+                break
+    return state
 
 
 def _start_benchmark(target_docs, device):
@@ -41,8 +91,57 @@ def _stop_benchmark(process):
 
 st.set_page_config(page_title="SENTINEL IEEE Benchmark", layout="wide")
 
-st.title("SENTINEL IEEE Final Benchmark (v2.0)")
-st.caption("Run the IEEE benchmark and review metrics in a live Streamlit dashboard.")
+st.markdown(
+    """
+    <style>
+    .hero {
+        padding: 1.4rem 1.6rem;
+        border-radius: 18px;
+        background: linear-gradient(120deg, #0f172a 0%, #1e293b 45%, #111827 100%);
+        color: white;
+        margin-bottom: 1rem;
+    }
+    .hero h1 {
+        font-size: 2rem;
+        margin-bottom: 0.25rem;
+    }
+    .badge {
+        display: inline-flex;
+        align-items: center;
+        padding: 0.2rem 0.6rem;
+        border-radius: 999px;
+        font-size: 0.75rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }
+    .badge.pending { background: #e2e8f0; color: #475569; }
+    .badge.running { background: #fde68a; color: #92400e; }
+    .badge.complete { background: #bbf7d0; color: #166534; }
+    .metric-card {
+        padding: 1rem;
+        border-radius: 14px;
+        border: 1px solid #e2e8f0;
+        background: white;
+        box-shadow: 0 10px 20px rgba(15, 23, 42, 0.05);
+    }
+    .metric-label { color: #64748b; font-size: 0.8rem; }
+    .metric-value { font-size: 1.6rem; font-weight: 700; }
+    .panel-title { font-size: 1.1rem; font-weight: 600; margin-bottom: 0.5rem; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.markdown(
+    """
+    <div class="hero">
+        <h1>SENTINEL IEEE Final Benchmark v2.0</h1>
+        <p>Live orchestration dashboard for smart loading, RaBitQ vectorization, retrieval evaluation, and multi-agent analysis.</p>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 if "benchmark_process" not in st.session_state:
     st.session_state.benchmark_process = None
@@ -50,10 +149,21 @@ if "benchmark_process" not in st.session_state:
 if "last_run" not in st.session_state:
     st.session_state.last_run = None
 
-col_controls, col_status = st.columns([1, 2])
+with st.sidebar:
+    st.markdown("## Live Orchestration Pipeline")
+    log_text = _read_logs()
+    pipeline_state = _infer_pipeline_state(log_text)
+    for step_key, step_label in PIPELINE_STEPS:
+        state = pipeline_state.get(step_key, "pending")
+        st.markdown(
+            f"<div style='margin-bottom:0.6rem;'>"
+            f"<span class='badge {state}'>{state}</span> "
+            f"<strong>{step_key}</strong> · {step_label}</div>",
+            unsafe_allow_html=True,
+        )
 
-with col_controls:
-    st.subheader("Run Configuration")
+    st.markdown("---")
+    st.markdown("### Run Configuration")
     target_docs = st.number_input(
         "Target documents (smart subset)",
         min_value=100,
@@ -76,8 +186,10 @@ with col_controls:
         st.session_state.benchmark_process = None
         st.warning("Benchmark process terminated.")
 
+col_status, col_metrics = st.columns([1.1, 1.4])
+
 with col_status:
-    st.subheader("Benchmark Status")
+    st.markdown("### Benchmark Status")
     process = st.session_state.benchmark_process
     if process and process.poll() is None:
         st.info("Benchmark is running.")
@@ -89,32 +201,49 @@ with col_status:
     if st.session_state.last_run:
         st.write(f"Last run started at: {st.session_state.last_run} UTC")
 
-st.divider()
+    if log_text:
+        st.markdown("#### Latest Log Snippet")
+        st.code("\n".join(log_text.splitlines()[-12:]), language="text")
+    else:
+        st.write("No logs yet. Start a benchmark to generate logs.")
 
-st.subheader("Live Logs")
-if os.path.exists(LOG_FILE):
-    with open(LOG_FILE, "r") as f:
-        st.text(f.read())
-else:
-    st.write("No logs yet. Start a benchmark to generate logs.")
+with col_metrics:
+    st.markdown("### Latest Results")
+    results = _load_results()
+    if results:
+        metrics = results.get("evaluation_metrics", {})
+        recall_at_k = metrics.get("recall_at_k", {})
+        precision_at_k = metrics.get("precision_at_k", {})
+        ndcg_at_k = metrics.get("ndcg_at_k", {})
 
-st.divider()
+        st.markdown("#### Summary Metrics")
+        metric_cols = st.columns(4)
+        metric_cols[0].markdown(
+            f"<div class='metric-card'><div class='metric-label'>Recall@10</div>"
+            f"<div class='metric-value'>{recall_at_k.get('10', 0):.4f}</div></div>",
+            unsafe_allow_html=True,
+        )
+        metric_cols[1].markdown(
+            f"<div class='metric-card'><div class='metric-label'>Precision@10</div>"
+            f"<div class='metric-value'>{precision_at_k.get('10', 0):.4f}</div></div>",
+            unsafe_allow_html=True,
+        )
+        metric_cols[2].markdown(
+            f"<div class='metric-card'><div class='metric-label'>NDCG@10</div>"
+            f"<div class='metric-value'>{ndcg_at_k.get('10', 0):.4f}</div></div>",
+            unsafe_allow_html=True,
+        )
+        metric_cols[3].markdown(
+            f"<div class='metric-card'><div class='metric-label'>MAP</div>"
+            f"<div class='metric-value'>{metrics.get('map', 0):.4f}</div></div>",
+            unsafe_allow_html=True,
+        )
 
-st.subheader("Latest Results")
-results = _load_results()
-if results:
-    st.json(results)
+        st.markdown("#### Full Results")
+        st.json(results)
+    else:
+        st.write("No benchmark results found. Run the benchmark to populate results.")
 
-    metrics = results.get("evaluation_metrics", {})
-    recall_at_k = metrics.get("recall_at_k", {})
-    precision_at_k = metrics.get("precision_at_k", {})
-    ndcg_at_k = metrics.get("ndcg_at_k", {})
-
-    st.markdown("### Summary Metrics")
-    col_a, col_b, col_c, col_d = st.columns(4)
-    col_a.metric("Recall@10", f"{recall_at_k.get('10', 0):.4f}")
-    col_b.metric("Precision@10", f"{precision_at_k.get('10', 0):.4f}")
-    col_c.metric("NDCG@10", f"{ndcg_at_k.get('10', 0):.4f}")
-    col_d.metric("MAP", f"{metrics.get('map', 0):.4f}")
-else:
-    st.write("No benchmark results found. Run the benchmark to populate results.")
+st.markdown("---")
+st.markdown("### Live Logs")
+st.text(log_text if log_text else "No logs yet. Start a benchmark to generate logs.")
